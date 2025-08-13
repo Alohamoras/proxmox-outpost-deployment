@@ -1,191 +1,372 @@
-# Installing Proxmox VE 7 on AWS EC2
+# Proxmox VE 8 on AWS Outpost Deployment
 
-Getting Proxmox to run on EC2 is a little tricky, but by using my cloud-init config you can automate the install process
-and get an instance running in minutes.
+Automated deployment of Proxmox VE 8 on AWS EC2 instances using cloud-init. This project enables you to run a complete Proxmox virtualization environment on AWS with minimal manual configuration.
+
+## What is This?
+
+This repository provides a streamlined way to deploy Proxmox VE 8 on AWS EC2 instances. Using automated cloud-init scripts, you can have a fully functional Proxmox environment running in minutes, perfect for labs, development, or production workloads.
+
+**Key Features:**
+- Automated Proxmox VE 8 installation on Debian 12
+- Pre-configured NAT networking for guest VMs/containers
+- Support for both container and full VM workloads
+- AWS-optimized network configuration
+- One-command deployment via AWS CLI
+
+## Prerequisites
+
+Before you begin, you should have:
+
+- **AWS Account** with EC2 access and appropriate permissions
+- **AWS CLI** installed and configured with your credentials
+- **Basic familiarity** with virtualization concepts
+- **SSH key pair** for EC2 access
+
+**What is Proxmox VE?** Proxmox Virtual Environment is an open-source virtualization platform that combines KVM (for virtual machines) and LXC (for containers) with a web-based management interface.
+
+**What are AWS Outposts?** AWS Outposts bring native AWS services and infrastructure to your on-premises locations, but this project works on standard EC2 as well.
 
 ## Quick Start
 
-1. **Launch EC2 instance** with:
-   - Debian 11 AMI (get latest: `aws ssm get-parameter --name /aws/service/debian/daily/bullseye/latest/amd64`)
-   - At least 2GB RAM (t3.small minimum, avoid t3.micro)
-   - Security group allowing TCP access from your IP only
+### Option 1: One-Command Deployment
 
-2. **Add user data**: Copy the contents of `cloud-init.yaml` into the EC2 User Data field during launch
+```bash
+# Get the latest Debian 12 AMI
+DEBIAN_AMI=$(aws ssm get-parameter --name /aws/service/debian/daily/bookworm/latest/amd64 --query 'Parameter.Value' --output text)
 
-3. **Wait for installation**: Takes ~7 minutes, monitor via EC2 Serial Console or SSH + `tail -f /var/log/syslog`
+# Create a security group (replace YOUR_IP with your actual IP)
+SG_ID=$(aws ec2 create-security-group \
+  --group-name proxmox-sg \
+  --description "Proxmox VE Security Group" \
+  --query 'GroupId' --output text)
 
-4. **Set root password**: SSH to instance and run `passwd` to set password for Proxmox web console
+# Allow SSH and Proxmox web access from your IP only
+aws ec2 authorize-security-group-ingress \
+  --group-id $SG_ID \
+  --protocol tcp --port 22 --cidr YOUR_IP/32
 
-5. **Access Proxmox**: Visit `https://YOUR_PUBLIC_IP:8006/` and login with `root`
+aws ec2 authorize-security-group-ingress \
+  --group-id $SG_ID \
+  --protocol tcp --port 8006 --cidr YOUR_IP/32
 
-6. **Reboot required**: Must reboot after installation to complete setup
-
-**Important**: For VM guests (not just containers), use metal instances (c5n.metal, m5zn.metal) - very expensive ~$4/hour. Always edit `/etc/network/interfaces` manually, don't use Proxmox GUI for network config.
-
-## Note for hosting VM guests
-
-Please note that if you want to be able to host VM guests in EC2 (rather than containers), Proxmox needs to run on an
-"metal" instance type (I only tested Intel, AMD might work too) to have access to VT-x/AMD-V and hence KVM hardware 
-acceleration (e.g. `c5n.metal`, `m5zn.metal`). 
-
-These instances are **very expensive** (starting at around $4/hour), because rather than getting a small slice of a 
-machine to run your VM on, you're getting an entire EC2 server, with hundreds of gigs of RAM and many cores. 
-Significant cost reductions (75%) are possible if you are able to take advantage of Spot Instances.
-
-See the list of available metal instance types here, and be sure to filter by Physical Processor type to exclude 
-Graviton:
-
-https://instances.vantage.sh/?filter=metal
-
-It's possible to run VMs without KVM support by turning it off on the "Options" tab of the VM, but this is 
-*excruciatingly* slow and only useful for experimentation.
-
-## Launching your Proxmox VM
-
-Launch a new VM with the following settings:
-
-- AMI: Use an official Debian 11 AMD64 AMI, e.g. from this list: https://wiki.debian.org/Cloud/AmazonEC2Image/Bullseye
-  
-  You can fetch the latest Debian 11 AMI ID programmatically with the AWS CLI like so:
-  ```bash
-  aws ssm get-parameter --name /aws/service/debian/daily/bullseye/latest/amd64
-  ```
-- Instance type: Something with at least 2GiB of RAM, e.g. `t3.small` for hosting containers, or a `metal` instance type
-  for hosting VMs. 
- 
-  `t3.micro` (with 1GiB of RAM) rapidly runs out of memory and freezes, even with no workloads running.
-- Network settings: To get started you can set up a security group which allows access to all TCP ports to your IP 
-  address only.
-
-  **Avoid exposing Proxmox to the Web at large!** If you need access from multiple IP addresses then set up a VPN to 
-  protect access to Proxmox.
-- Storage: You can set up the initial size of your root disk here. I set mine to 64GB since I'm planning to store some
-  ISOs and containers on the root disk.
-- Advanced details: In this section, scroll all the way down to **User Data**. Paste in 
-  [this user-data script](https://raw.githubusercontent.com/thenickdude/proxmox-on-ec2/master/cloud-init.yaml). 
- 
-  At the start of that script you can edit the `hostname` and `fqdn` fields to set the hostname of your server.
-  e.g. you might set `hostname` to `pve` and `fqdn` to `pve.example.com`. The hostname becomes the name of your Proxmox
-  node and is not easily changed later.
-
-Now launch the instance. In the background, the user-data script will automatically download and install Proxmox and 
-configure the network for you.
-
-You can check the installation progress in the EC2 console by clicking Actions > Monitor and Troubleshoot > 
-EC2 Serial Console, this is equivalent to Proxmox's console monitor. Or you can SSH in and run `tail -f /var/log/syslog` 
-instead. 
-
-Note that the serial console is not supported on `metal` instance types.
-
-You need to SSH in to set a password for the `root` account so that you'll be able to use this
-password to log in to Proxmox's Web console, you can do this while the installation is still running.
-
-Run `ssh root@YOUR_PUBLIC_IP` (using your private key), then run `passwd` to set the password for
-root.
-
-Once setup completes (the last line'll be `[  OK  ] Reached target Cloud-init target.`, which I reached in about 7 
-minutes on `t3.small`), you can access Proxmox's console by visiting `https://<your instance's public IP>:8006/`,
-and log in using `root` as your username and the password you set. 
-
-**You need to reboot Proxmox now** to complete the installation of system updates and switch to the Proxmox kernel (containers 
-will fail to launch otherwise, with fatal AppArmor errors!)
-
-## Note on host network config
-
-The system supports ENIs (network adapters) being attached dynamically at runtime, so the config for these is 
-automatically generated using `/etc/network/cloud-interfaces-template` and stored into `/run/network/interfaces.d`. 
-DHCP is used for these interfaces to pick up the correct private IPv4 addresses from EC2.
-
-Because Proxmox doesn't know about these config files, using Proxmox to edit the network config causes it to generate
-non-functional stub configs for those network adapters, which breaks networking.
-
-**So always edit `/etc/network/interfaces` by hand** instead of using Proxmox's "System > Network" panel in the WebUI.
-
-If you end up locking yourself out due to bad network config, you can log in using the Serial Console to fix up
-`/etc/network/interfaces`, and then run `systemctl restart networking.service` afterwards to apply your changes.
-
-**No IPv6 support is enabled.** This is possible, but as I don't have a usecase for it myself I haven't tested it 
-out.
-
-## Guest networking
-
-### NAT guests
-
-On EC2 your Proxmox server only has one IP address by default, so VMs/containers will need to use NAT to share the host's
-IP address to talk to the rest of the network. 
-
-My install script automatically sets up `vmbr0` for you at `10.10.10.1/24`, using NAT, with a `dnsmasq` DHCP server 
-available on that interface. 
-
-So if you add guests to `vmbr0`, and enable DHCP in your guest's network settings, they should get an IP address 
-automatically and be able to connect to the Internet.
-
-These guests don't have an IP address which is visible to the EC2 network, they can only be connected to from Proxmox
-and from other guests. If you need this support, read on to the next section!
-
-### Routed guests
-
-If you want to assign a proper IP address to your guests, you can add multiple local IP addresses to your instance's
-ENI. Check this article to see what the limit is for your instance type:
-
-https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html
-
-e.g. for `t3.small`, this limit is 4 local IP addresses (1 for Proxmox and 3 for guests).
-
-My instance's subnet's CIDR is `172.31.0.0/20`, so I decide on a subnet somewhere within that range to allocate my 
-guest IP addresses in, `172.31.14.8/29`. Of that subnet, the first address will be used by Proxmox's bridge 
-(`172.31.14.8`), so I add the subsequent addresses `172.31.14.9`, `172.31.14.10`, and `172.31.14.11` to my ENI's IP 
-private address pool:
-
-![Adding more private IP addresses](assigning-ip-addresses.png)
-
-I edit Proxmox's `/etc/network/interfaces` to add a definition for a new bridge, `vmbr1`, with its address set to the 
-first IP address of that subnet:
-
+# Launch the instance
+aws ec2 run-instances \
+  --image-id $DEBIAN_AMI \
+  --instance-type t3.small \
+  --key-name YOUR_KEY_NAME \
+  --security-group-ids $SG_ID \
+  --user-data file://cloud-init-deb-12-proxmox-8.yaml \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=Proxmox-VE}]'
 ```
+
+### Option 2: Step-by-Step Deployment
+
+1. **Get the latest Debian 12 AMI**:
+   ```bash
+   aws ssm get-parameter --name /aws/service/debian/daily/bookworm/latest/amd64 --query 'Parameter.Value' --output text
+   ```
+
+2. **Launch EC2 instance** with:
+   - **AMI**: Use the Debian 12 AMI from step 1
+   - **Instance Type**: `t3.small` minimum (2GB RAM) - avoid `t3.micro`
+   - **Key Pair**: Your existing SSH key pair
+   - **Security Group**: Allow TCP 22 (SSH) and 8006 (Proxmox) from your IP only
+   - **User Data**: Contents of `cloud-init-deb-12-proxmox-8.yaml`
+
+3. **Monitor installation** (~7-10 minutes):
+   ```bash
+   # Get your instance IP
+   INSTANCE_IP=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=Proxmox-VE" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+   
+   # Monitor progress via SSH
+   ssh -i your-key.pem root@$INSTANCE_IP "tail -f /var/log/cloud-init-output.log"
+   ```
+
+4. **Set root password**:
+   ```bash
+   ssh -i your-key.pem root@$INSTANCE_IP "passwd"
+   ```
+
+5. **Access Proxmox Web UI**: Visit `https://YOUR_INSTANCE_IP:8006/`
+   - Username: `root`
+   - Password: The password you just set
+
+6. **Reboot after first login**:
+   ```bash
+   ssh -i your-key.pem root@$INSTANCE_IP "reboot"
+   ```
+   This activates the Proxmox kernel and prevents container launch issues.
+
+### Instance Type Selection
+
+| Use Case | Recommended Instance | Notes |
+|----------|---------------------|--------|
+| **Containers Only** | `t3.small` or larger | Minimum 2GB RAM required |
+| **Virtual Machines** | `c5n.metal`, `m5zn.metal` | Requires hardware virtualization (~$4/hour) |
+
+⚠️ **Important**: `t3.micro` (1GB RAM) will freeze under load. Metal instances are expensive but required for VM guests with hardware acceleration.
+
+## Understanding Network Configuration
+
+The automated setup creates a network configuration optimized for AWS. Here's what gets configured automatically:
+
+### Automatic Network Setup
+
+**Primary Interface (`eth0` or similar):**
+- Managed by AWS with DHCP
+- Gets your instance's private IP from AWS
+- Handles internet connectivity
+
+**NAT Bridge (`vmbr0`):**
+- Internal network: `10.10.10.0/24`
+- Gateway: `10.10.10.1` (the Proxmox host)
+- DHCP server provides IPs `10.10.10.2` - `10.10.10.254`
+- All guest traffic is NAT'd through the host's primary interface
+
+### For Your Guests (VMs/Containers)
+
+**Simple Setup (Recommended):**
+1. Attach guests to bridge `vmbr0`
+2. Enable DHCP in guest network settings
+3. Guests automatically get internet access
+
+**What This Means:**
+- ✅ Guests can access the internet
+- ✅ Guests can communicate with each other
+- ✅ Host can access guests via their 10.10.10.x IPs
+- ❌ External AWS resources cannot directly access guests
+- ❌ Guests don't have "real" AWS IP addresses
+
+### Critical Network Rules
+
+⚠️ **NEVER edit network settings through the Proxmox web interface** - this will break connectivity!
+
+**Always edit `/etc/network/interfaces` manually via SSH:**
+```bash
+ssh -i your-key.pem root@YOUR_IP
+nano /etc/network/interfaces
+systemctl restart networking.service
+```
+
+### Advanced: Direct Guest Access (Optional)
+
+If you need external AWS resources to access your guests directly, see the "Advanced Networking" section below.
+
+## Virtual Machine Requirements
+
+### For Container Workloads
+- **Instance Types**: `t3.small` or larger
+- **Minimum RAM**: 2GB (avoid `t3.micro`)
+- **Cost**: Starting ~$0.02/hour
+- **What You Get**: LXC containers, perfect for microservices, web apps, databases
+
+### For Full Virtual Machines
+- **Instance Types**: `c5n.metal`, `m5zn.metal`, etc.
+- **Requirements**: Hardware virtualization support (VT-x/AMD-V)
+- **Cost**: ~$4/hour (use Spot Instances for 75% savings)
+- **What You Get**: Full VMs with hardware acceleration
+
+**Why Metal Instances?** Standard EC2 instances run on hypervisors that don't expose hardware virtualization features. Metal instances give you direct hardware access, enabling nested virtualization.
+
+**Alternative**: You can run VMs on standard instances by disabling KVM in the VM's Options tab, but performance will be extremely poor.
+
+## Advanced Networking: Direct Guest Access
+
+By default, guests use NAT networking and aren't directly accessible from AWS. If you need AWS resources to directly access your guests, you can configure routed networking.
+
+### When You Need This
+- Database servers that AWS resources need to access
+- Web services that need AWS Application Load Balancer integration  
+- Microservices that need direct VPC communication
+
+### Setup Process
+
+**1. Assign Additional Private IPs to Your Instance**
+
+Check your instance type's ENI limits: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html
+
+For `t3.small`: 1 primary + 3 additional IPs (4 total)
+
+```bash
+# Add additional private IPs to your instance
+aws ec2 assign-private-ip-addresses \
+  --network-interface-id <YOUR_ENI_ID> \
+  --private-ip-addresses 172.31.14.9 172.31.14.10 172.31.14.11
+```
+
+**2. Configure Bridge on Proxmox Host**
+
+SSH to your Proxmox instance and edit `/etc/network/interfaces`:
+
+```bash
+# Add this to the end of /etc/network/interfaces
 auto vmbr1
 iface vmbr1 inet static
-# Routed network for guests with manually-allocated secondary private ENI IPs
-    address 172.31.14.8/29
+    address 172.31.14.8/29  # First IP in your range
     bridge-ports none
     bridge-stp off
     bridge-fd 0
-
     post-up echo 1 > /proc/sys/net/ipv4/ip_forward
-    post-up echo 1 > /proc/sys/net/ipv4/conf/MAIN_NETWORK_ADAPTER_NAME_HERE/proxy_arp
+    post-up echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
+
+# Apply changes
+systemctl restart networking.service
 ```
 
-Load the new configuration by running `systemctl restart networking.service`.
+**3. Configure Guests**
 
-Then when launching guests, attach them to `vmbr1`, set their IP address manually from
-`vmbr1`'s subnet, e.g. `172.31.14.9/29` (`/29` is equivalent to a subnet mask of `255.255.255.248`), and set their 
-gateway to the IP address for `vmbr1`, e.g. `172.31.14.8`. You can set their DNS server to `169.254.169.253`,
-which is the AWS VPC DNS server address, or otherwise just point it at your favourite public DNS service, like `8.8.8.8`.
+For each guest:
+- Attach to bridge `vmbr1`
+- Set static IP: `172.31.14.9/29`, `172.31.14.10/29`, etc.
+- Gateway: `172.31.14.8` (the bridge IP)
+- DNS: `169.254.169.253` (AWS VPC DNS)
 
-**The security group for the ENI applies to both the host and to all guests**, so if you want to restrict 
-access to specific guests you'll need to use Proxmox's firewall rules to achieve that.
+**4. Optional: Public IP Access**
 
-Now your guests can access and be accessed by hosts on the local VPC network. But right now they don't have a 
-public IP assigned, so they can't connect to the Internet or be connected to from it.
+To give guests internet access, associate Elastic IPs:
 
-**To give a guest a public IP,** you need to allocate an Elastic IP address, associate it with the ENI, and bind it to the
-corresponding Private IP address. 
-
-Note that if you do this, Proxmox itself will no longer be allocated a temporary public IP address automatically on 
-instance startup, so you need to attach an Elastic IP address to that too if you need to retain public-IP access to it.
-
-## Turning Proxmox into an AMI
-
-You can create an AMI from Proxmox and use that to launch a new EC2 instance, although note that the caveats described
-here still apply if you want to change the hostname (can't have any containers or VMs created beforehand):
-
-https://pve.proxmox.com/wiki/Renaming_a_PVE_node
-
-When you launch a new instance from the AMI, in the launch wizard use this User Data script to set the hostname (in 
-place of the IP-address based hostname it would otherwise generate automatically):
-
-```yaml
-#cloud-config
-hostname: proxmox
-fqdn: proxmox.local
+```bash
+aws ec2 associate-address \
+  --instance-id <INSTANCE_ID> \
+  --private-ip-address 172.31.14.9 \
+  --allocation-id <ELASTIC_IP_ALLOCATION_ID>
 ```
+
+### Security Considerations
+- Instance security group applies to ALL guests
+- Use Proxmox firewall for guest-specific rules
+- Consider dedicated security groups per workload
+
+## Troubleshooting
+
+### Installation Issues
+
+**Problem**: Cloud-init fails or hangs
+```bash
+# Check cloud-init status
+ssh -i your-key.pem root@YOUR_IP "systemctl status cloud-final.service"
+
+# View installation logs
+ssh -i your-key.pem root@YOUR_IP "tail -f /var/log/cloud-init-output.log"
+```
+
+**Problem**: Can't access Proxmox web interface
+- ✅ Check security group allows TCP 8006 from your IP
+- ✅ Verify instance is running and cloud-init completed
+- ✅ Try accessing via private IP if on VPN/direct connect
+
+**Problem**: Instance appears frozen
+- Likely cause: `t3.micro` with insufficient RAM
+- Solution: Stop instance, change to `t3.small`, restart
+
+### Container/VM Issues
+
+**Problem**: Containers fail to start with AppArmor errors
+```bash
+# Reboot to activate Proxmox kernel
+ssh -i your-key.pem root@YOUR_IP "reboot"
+```
+
+**Problem**: Guests can't access internet
+- ✅ Verify guest attached to `vmbr0`
+- ✅ Enable DHCP in guest network settings
+- ✅ Check guest received IP in 10.10.10.x range
+
+### Network Connectivity
+
+**Problem**: Lost SSH access after network changes
+```bash
+# Use EC2 Serial Console to recover
+# Fix /etc/network/interfaces manually
+# Restart networking: systemctl restart networking.service
+```
+
+**Problem**: Guests can't reach each other
+- ✅ Ensure all guests on same bridge (`vmbr0`)
+- ✅ Check Proxmox firewall rules
+- ✅ Verify DHCP assigned IPs correctly
+
+### Performance Issues
+
+**Problem**: Slow VM performance
+- For full VMs: Use metal instances with hardware virtualization
+- For containers: Increase instance size or optimize container resources
+
+### Common Commands
+
+```bash
+# Check Proxmox services
+systemctl status pve*
+
+# View network configuration
+ip addr show
+brctl show
+
+# Monitor resource usage
+htop
+df -h
+
+# Check guest IPs
+cat /var/lib/dhcp/dhcpd.leases  # If using DHCP
+```
+
+## Creating Custom AMIs
+
+You can create custom AMIs from your configured Proxmox instance for faster future deployments:
+
+```bash
+# Create AMI from your running instance
+aws ec2 create-image \
+  --instance-id <YOUR_INSTANCE_ID> \
+  --name "Proxmox-VE-8-Custom" \
+  --description "Pre-configured Proxmox VE 8 on Debian 12"
+```
+
+**Important**: If you plan to change hostnames on AMI-launched instances, ensure no VMs/containers exist (see [Proxmox node renaming guide](https://pve.proxmox.com/wiki/Renaming_a_PVE_node)).
+
+**Launch from custom AMI** with hostname override:
+```bash
+aws ec2 run-instances \
+  --image-id <YOUR_CUSTOM_AMI> \
+  --instance-type t3.small \
+  --key-name YOUR_KEY_NAME \
+  --security-group-ids <SG_ID> \
+  --user-data $'#cloud-config\nhostname: proxmox\nfqdn: proxmox.local'
+```
+
+## Cleanup Resources
+
+When you're done testing, clean up to avoid charges:
+
+```bash
+# Terminate instance
+aws ec2 terminate-instances --instance-ids <INSTANCE_ID>
+
+# Delete security group (after instance terminates)
+aws ec2 delete-security-group --group-id <SECURITY_GROUP_ID>
+
+# Release Elastic IPs (if used)
+aws ec2 release-address --allocation-id <ALLOCATION_ID>
+```
+
+## Legacy Support
+
+For older deployments, Debian 11 with Proxmox VE 7 is still available:
+
+```bash
+# Use legacy configuration
+aws ec2 run-instances \
+  --image-id $(aws ssm get-parameter --name /aws/service/debian/daily/bullseye/latest/amd64 --query 'Parameter.Value' --output text) \
+  --instance-type t3.small \
+  --user-data file://cloud-init-deb-11-proxmox-7.yaml \
+  # ... other parameters
+```
+
+The Debian 12/Proxmox 8 configuration is recommended for new deployments due to improved security, performance, and longer support lifecycle.
+
+## Further Reading
+
+- [Proxmox VE Documentation](https://pve.proxmox.com/wiki/Main_Page)
+- [AWS EC2 Instance Types](https://aws.amazon.com/ec2/instance-types/)
+- [AWS Networking Best Practices](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-best-practices.html)
+- [Metal Instance Pricing](https://instances.vantage.sh/?filter=metal)
