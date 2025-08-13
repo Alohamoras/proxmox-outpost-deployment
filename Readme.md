@@ -3,6 +3,25 @@
 Getting Proxmox to run on EC2 is a little tricky, but by using my cloud-init config you can automate the install process
 and get an instance running in minutes.
 
+## Quick Start
+
+1. **Launch EC2 instance** with:
+   - Debian 11 AMI (get latest: `aws ssm get-parameter --name /aws/service/debian/daily/bullseye/latest/amd64`)
+   - At least 2GB RAM (t3.small minimum, avoid t3.micro)
+   - Security group allowing TCP access from your IP only
+
+2. **Add user data**: Copy the contents of `cloud-init.yaml` into the EC2 User Data field during launch
+
+3. **Wait for installation**: Takes ~7 minutes, monitor via EC2 Serial Console or SSH + `tail -f /var/log/syslog`
+
+4. **Set root password**: SSH to instance and run `passwd` to set password for Proxmox web console
+
+5. **Access Proxmox**: Visit `https://YOUR_PUBLIC_IP:8006/` and login with `root`
+
+6. **Reboot required**: Must reboot after installation to complete setup
+
+**Important**: For VM guests (not just containers), use metal instances (c5n.metal, m5zn.metal) - very expensive ~$4/hour. Always edit `/etc/network/interfaces` manually, don't use Proxmox GUI for network config.
+
 ## Note for hosting VM guests
 
 Please note that if you want to be able to host VM guests in EC2 (rather than containers), Proxmox needs to run on an
