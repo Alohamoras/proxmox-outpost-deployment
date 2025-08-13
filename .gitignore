@@ -1,0 +1,58 @@
+# Test artifacts and logs
+test-*.log
+test-report-*.md
+*.pem
+
+# AWS credentials and config
+.aws/
+aws-credentials
+
+# Environment files with secrets
+.env
+*.env.local
+*-secrets.env
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Cloud-init user data with secrets
+*-secrets.yaml
+*-private.yaml
+
+# Test instance data
+instance-*.json
+security-group-*.json
+
+# Terraform state (if used)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Local configuration overrides
+config.local.*
+test-config.local.env
