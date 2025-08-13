@@ -89,5 +89,9 @@ runcmd:
       chown root:www-data pve-ssl.key pve-ssl.pem
       chmod 640 pve-ssl.key pve-ssl.pem
     fi
+  # Configure no-subscription repositories and disable enterprise repos
+  - echo "deb http://download.proxmox.com/debian/ceph-reef bookworm no-subscription" > /etc/apt/sources.list.d/ceph-no-subscription.list
+  - rm -f /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/ceph.list
+  - apt update
   # Restart all PVE services
   - systemctl restart pvedaemon pveproxy pvescheduler pvestatd
